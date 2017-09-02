@@ -1,0 +1,381 @@
+<html>
+	<head>
+		<style type="text/css">
+			body {
+			  background-color: black;
+			}
+
+			canvas {
+			  border: 1px solid green;
+			}
+
+			p {
+			  font-family: monospace;
+			  color: green;
+			}
+		</style>
+	</head>
+	<body>
+		<body>
+		  <canvas id="canvas" width="300" height="300"></canvas>
+		  <p>LUNAR LANDER</p>
+		  <p>L/R arrow keys move, up arrow thrusts</p>
+		  <p>Land gently onto the <b><i>flat surface</i></b></p>
+		</body>
+	</body>
+	<script type="text/javascript">
+		// game namespace
+		var Lunar = {};
+
+		// canvas
+		var canvas = document.getElementById("canvas");
+		var c = canvas.getContext("2d");
+
+		// constants
+		var N_POINTS = 16;
+		var CANVAS_DIM = 300;
+		var CONTOUR_HEIGHT = 150;
+		var SEGMENT_WIDTH = 20;
+		var EPSILON = 0.00001;
+
+		var map = [];
+		var flatIndex;
+		var ship;
+		var shipCopy;
+		var shipLocation = new VectorPoint(CANVAS_DIM / 2, 15);
+		var velocity = new VectorPoint(0, 0);
+		var accel = new VectorPoint(0, 0);
+		var g = new VectorPoint(0, 1 / 15);
+		var friction = new VectorPoint(1.5, 0);
+		var died = false;
+		var won = false;
+
+		Lunar.Game = {
+		  run: function() {
+			canvas.focus();
+			Lunar.Map.initMap();
+			Lunar.Game.handleKeys();
+			setInterval(function() {
+			  Lunar.Game.gameLoop();
+			}, 100);
+		  },
+		  handleKeys: function() {
+			document.body.addEventListener('keydown', function(e) {
+			  if (e.keyCode == 37)
+				velocity = VectorFunctions.add(velocity, new VectorPoint(-1, 0));
+			  else if (e.keyCode == 39)
+				velocity = VectorFunctions.add(velocity, new VectorPoint(1, 0));
+			  if (e.keyCode == 38)
+				velocity = VectorFunctions.add(velocity, new VectorPoint(0, -1));
+			});
+		  },
+		  gameLoop: function() {
+			c.beginPath();
+			c.rect(0, 0, CANVAS_DIM, CANVAS_DIM);
+			c.fillStyle = "#000000";
+			c.fill();
+			Lunar.Map.drawMap();
+			Lunar.Map.drawPlatform();
+			if (!died && !won)
+			  Lunar.Ship.drawShip();
+			if (velocity.y > 4)
+			  Lunar.Text.drawWarning();
+			if (won) {
+			  console.log(JSON.stringify(velocity));
+			  Lunar.Text.drawWon();
+			}
+			if (Lunar.Physics.collision()) {
+			  died = true;
+			  Lunar.Text.drawDied();
+			}
+		  }
+		};
+
+		Lunar.Map = {
+		  initMap: function() {
+			// get the location where the landing area will be located
+			flatIndex = Math.floor(Math.random() * N_POINTS);
+			console.log("FlatIndex: " + flatIndex);
+			for (var i = 0; i < N_POINTS - 1; i++) {
+			  // get the y-coordinate for the contour map
+			  var value = Math.random() * CONTOUR_HEIGHT + (CANVAS_DIM - CONTOUR_HEIGHT - 20);
+			  map.push(value);
+			  // add two same coordinates to the map to generate the landing area
+			  if (i == flatIndex)
+				map.push(value);
+			}
+		  },
+		  drawMap: function() {
+			c.beginPath();
+			c.strokeStyle = "#00ff00"; // green
+			c.moveTo(0, map[0]); // start drawing
+			// loop through the contour map, draw it
+			for (var i = 1; i < map.length; i++)
+			  c.lineTo(i * SEGMENT_WIDTH, map[i]);
+			c.stroke();
+		  },
+		  drawPlatform: function() {
+			c.beginPath();
+			c.moveTo(flatIndex * SEGMENT_WIDTH, map[flatIndex] + 5);
+			c.lineTo((flatIndex + 1) * SEGMENT_WIDTH, map[flatIndex + 1] + 5);
+			c.stroke();
+		  }
+		};
+
+		Lunar.Ship = {
+		  createShip: function() {
+			// generate the ship according to the origin (the intersection of X and Y axes)
+			var body = [
+			  new VectorPoint(-7, -7),
+			  new VectorPoint(7, -7),
+			  new VectorPoint(7, 7),
+			  new VectorPoint(-7, 7)
+			];
+			var antenna = [
+			  new VectorPoint(-3, -10),
+			  new VectorPoint(0, -7),
+			  new VectorPoint(3, -10)
+			];
+			return new Ship(antenna, body);
+		  },
+		  drawShip: function() {
+			velocity = VectorFunctions.add(velocity, accel);
+			velocity = VectorFunctions.add(velocity, g);
+			shipLocation = VectorFunctions.add(shipLocation, velocity);
+			if (shipLocation.x > CANVAS_DIM) {
+			  shipLocation.x = CANVAS_DIM;
+			  Lunar.Physics.resetVA(true);
+			}
+			if (shipLocation.x < 0) {
+			  shipLocation.x = 0;
+			  Lunar.Physics.resetVA(true);
+			}
+			if (shipLocation.y > CANVAS_DIM) {
+			  shipLocation.y = CANVAS_DIM;
+			  Lunar.Physics.resetVA();
+			}
+			if (shipLocation.y < 0) {
+			  shipLocation.y = 0;
+			  Lunar.Physics.resetVA();
+			}
+			shipCopy = Lunar.Ship.translateShip();
+			Lunar.Ship.drawPolygon(shipCopy.body);
+			Lunar.Ship.drawPolygon(shipCopy.antenna);
+		  },
+		  translateShip: function() {
+			var matrix = MatrixFunctions.translate(shipLocation);
+			var body = Lunar.Ship.translatePolygon(ship.body, matrix);
+			var antenna = Lunar.Ship.translatePolygon(ship.antenna, matrix);
+			return new Ship(body, antenna);
+		  },
+		  translatePolygon: function(polygon, matrix) {
+			var polyCopy = [];
+			for (vectorPoint of polygon)
+			  polyCopy.push(MatrixFunctions.mulVector(matrix, vectorPoint));
+			return polyCopy;
+		  },
+		  drawPolygon: function(polygon) {
+			var start = polygon[polygon.length - 1];
+			c.moveTo(start.x, start.y);
+			for (var i = 0; i < polygon.length; i++) {
+			  c.lineTo(polygon[i].x, polygon[i].y);
+			}
+			c.stroke();
+		  }
+		};
+
+		Lunar.Physics = {
+		  resetVA: function(x) {
+			velocity = new VectorPoint(0, 0);
+			if (x)
+			  accel.x = 0;
+			else
+			  accel = new VectorPoint(0, 0);
+		  },
+		  // Algorithm from "Fundamental 2D Game Programming With Java" by Timothy Wright
+		  collision: function() {
+			var winFlag = false;
+			for (var i = 1; i < map.length; i++) {
+			  var res;
+			  var start = new VectorPoint((i - 1) * SEGMENT_WIDTH, map[i - 1]);
+			  var end = new VectorPoint(i * SEGMENT_WIDTH, map[i]);
+			  var d = VectorFunctions.sub(end, start);
+			  var len = VectorFunctions.len(d);
+			  d = VectorFunctions.norm(d);
+			  res = Lunar.Physics.rectLineCollision(start, d);
+			  if (res != null && res > 0 && res < len) {
+				if (i - 1 == flatIndex && velocity.y <= 4) {
+				  winFlag = true;
+				  break;
+				} else {
+				  var insec = VectorFunctions.add(start, VectorFunctions.mul(d, res));
+				  c.beginPath();
+				  c.moveTo(insec.x - 10, insec.y);
+				  c.lineTo(insec.x + 10, insec.y);
+				  c.moveTo(insec.x, insec.y - 10);
+				  c.lineTo(insec.x, insec.y + 10);
+				  c.stroke();
+				}
+				break;
+			  }
+			}
+			if (winFlag == true) {
+			  won = true;
+			  return false;
+			}
+			return (res != null && res > 0 && res < len);
+		  },
+		  rectLineCollision: function(start, d) {
+			var largestMin = -Number.MAX_VALUE;
+			var smallestMax = Number.MAX_VALUE;
+			for (var i = 0; i < 2; i++) {
+			  var n = VectorFunctions.sub(shipCopy.body[i], shipCopy.body[i + 1]);
+			  n = VectorFunctions.norm(n);
+			  var sub1 = VectorFunctions.sub(shipCopy.body[i], start);
+			  var sub2 = VectorFunctions.sub(shipCopy.body[i + 1], start);
+			  var e0 = VectorFunctions.dot(n, sub1);
+			  var e1 = VectorFunctions.dot(n, sub2);
+			  var f = VectorFunctions.dot(n, d);
+			  if (Math.abs(f) > EPSILON) {
+				var t0 = e0 / f;
+				var t1 = e1 / f;
+				if (t0 > t1) {
+				  var swap = t0;
+				  t0 = t1;
+				  t1 = swap;
+				}
+				largestMin = Math.max(largestMin, t0);
+				smallestMax = Math.min(smallestMax, t1);
+				if (largestMin > smallestMax) {
+				  return null;
+				}
+				if (smallestMax < 0) {
+				  return null;
+				}
+			  } else if (e0 * e1 > 0) {
+				return null;
+			  }
+			}
+			return largestMin > 0 ? largestMin : smallestMax;
+		  }
+		}
+
+		Lunar.Text = {
+		  drawWon: function() {
+			c.font = "normal 20pt Courier New";
+			c.fillStyle = "#00ff00";
+			c.fillText("You win!", 20, 20);
+		  },
+		  drawDied: function() {
+			c.font = "normal 20pt Courier New";
+			c.fillStyle = "#ff0000";
+			c.fillText("You died!", 20, 20);
+		  },
+		  drawWarning: function() {
+			c.font = "normal 10pt Courier New";
+			c.fillStyle = "#ff0000";
+			c.fillText("Too fast!", 170, 20);
+		  }
+		};
+
+		ship = Lunar.Ship.createShip();
+		Lunar.Game.run();
+
+		var VectorFunctions = {
+		  // v1: VectorPoint
+		  // v2: VectorPoint
+		  add: function(v1, v2) {
+			return new VectorPoint(v1.x + v2.x, v1.y + v2.y);
+		  },
+		  // v1: VectorPoint
+		  // v2: VectorPoint
+		  sub: function(v1, v2) {
+			return new VectorPoint(v1.x - v2.x, v1.y - v2.y);
+		  },
+		  mul: function(v, n) {
+			return new VectorPoint(v.x * n, v.y * n);
+		  },
+		  // v: VectorPoint
+		  // n: number
+		  div: function(v, n) {
+			return new VectorPoint(v.x / n, v.y / n);
+		  },
+		  // v: VectorPoint
+		  len: function(v) {
+			return Math.sqrt(v.x * v.x + v.y * v.y);
+		  },
+		  // v: VectorPoint
+		  norm: function(v) {
+			return VectorFunctions.div(v, VectorFunctions.len(v));
+		  },
+		  // v: VectorPoint
+		  perp: function(v) {
+			return new VectorPoint(-v.y, v.x);
+		  },
+		  // v1: VectorPoint
+		  // v2: VectorPoint
+		  dot: function(v1, v2) {
+			return v1.x * v2.x + v1.y * v2.y;
+		  },
+		  // x: number, y: number, w: number
+		  vectorW: function(x, y, w) {
+			var v = new VectorPoint(x, y);
+			v.w = w;
+			return v;
+		  }
+		};
+
+		var MatrixFunctions = {
+		  // m1: number[][]
+		  copyMatrix: function(array2d) {
+			var m = new Matrix();
+			m.m = array2d;
+			return m;
+		  },
+		  // position: VectorPoint
+		  translate: function(position) {
+			var m = MatrixFunctions.copyMatrix([
+			  [1, 0, 0],
+			  [0, 1, 0],
+			  [position.x, position.y, 1]
+			]);
+			return m;
+		  },
+		  // matrix: Matrix
+		  // vector: VectorPoint
+		  mulVector: function(matrix, vector) {
+			return VectorFunctions.vectorW(
+			  vector.x * matrix.m[0][0] + vector.y * matrix.m[1][0] + vector.w * matrix.m[2][0],
+			  vector.x * matrix.m[0][1] + vector.y * matrix.m[1][1] + vector.w * matrix.m[2][1],
+			  vector.x * matrix.m[0][2] + vector.y * matrix.m[1][2] + vector.w * matrix.m[2][2]
+			);
+		  }
+		};
+
+		/***** Object-oriented JS! *****/
+
+		// x: number
+		// y: number
+		function VectorPoint(x, y) {
+		  this.x = x;
+		  this.y = y;
+		  this.w = 1;
+		};
+
+		function Matrix() {
+		  this.m = [
+			[0, 0, 0],
+			[0, 0, 0],
+			[0, 0, 0]
+		  ];
+		};
+
+		// antenna: VectorPoint[]
+		// body: VectorPoint[]
+		function Ship(antenna, body) {
+		  this.antenna = antenna;
+		  this.body = body;
+		}
+
+	</script>
+</html>
